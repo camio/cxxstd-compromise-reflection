@@ -1,0 +1,34 @@
+citecolor: blue
+linkcolor: blue
+urlcolor: blue
+toccolor: black
+
+uccolor: 898887
+addcolor: 006e28
+rmcolor: bf0303
+
+block-headings: true
+link-citations: true
+strikeout: true
+
+header-includes:
+  - |
+    ```{=latex}
+    % layout
+    \usepackage{fullpage}
+    % adjust quote indent
+    \renewenvironment{quote}{\list{}{\leftmargin=0.2in}\item[]}{\endlist}
+    % adjust list style
+    \renewcommand{\labelitemi}{---}
+    \renewcommand{\labelitemii}{---}
+    \renewcommand{\labelitemiii}{---}
+    \renewcommand{\labelitemiv}{---}
+    % `\pnum`: https://github.com/cplusplus/draft/blob/master/source/layout.tex
+    \makeatletter
+    \newcommand{\pnum}[1]{%
+    \noindent\makebox[0pt][l]{\makebox[0pt][r]{%
+    \scriptsize\raisebox{.7ex}{#1}%
+    \hspace{\@totalleftmargin}\quad%
+    }}\ignorespaces}
+    \makeatother
+    ```
