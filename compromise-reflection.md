@@ -16,21 +16,127 @@ toc-depth: 4
 
 The two primary `constexpr`-based reflection proposals for C++ are at odds with
 eachother. "constexpr reflexpr" (@P0953R2) focuses on a simple and familiar
-API, but suffers from from potential performance issues and could potentially
-make evolution of the language difficult. "Scalable Reflection in C++"
-(@P1240R0) solves these two issues, but it comes with a significant cost in
-terms of usability. This paper is an attempt to bridge the two approaches by
-introducing the generally useful feature, parameter constraints, and providing
-guidelines for a reflection API that is both user-friendly and has a
-straightforward evolutionary path as the language changes.
+API, but could potentially make evolution of the language difficult. "Scalable
+Reflection in C++" (@P1240R0) solves this issue, but some of us consider it to
+have a significant cost in terms of usability. This paper is an attempt to
+bridge the two approaches by introducing a generally useful feature,
+parameter constraints, and providing guidelines for a reflection API that is
+both user-friendly and has a straightforward evolutionary path as the language
+changes.
 
 # Introduction
 
-## Brief History of Reflection in C++
+The Reflection TS (@N4766) adds, for the first time, reflection facilities in
+C++. It is based on the traditional template metaprogramming paradigm with
+the addition of concepts.
+
+Over time it became clear that an approach based on `constexpr` would be
+superior in both compile-time efficiency and approachability by non-experts.
+Two independent efforts were made to design such a system culminating in
+"constexpr reflexpr" (@P0953R2) and "Scalable Reflection in C++"
+(@P1240R0). While the fundamental machinery in these two proposals is similar,
+the user-level APIs have significant differences.
+
+At the time of this writing, the committee has not converged on either
+paper. In this document we will briefly summarize the chief differences and
+outline a new design, based on a new parameter constraints feature, that has
+the potential to bridge the gap between the two proposals.
 
 ## Typeful Reflection and its Drawbacks
 
+"constexpr reflexpr" (@P0953R2) is typeful in that values returned by the
+`reflexpr` operator have types corresponding to the kind of syntax being
+reflected. See the following example:
+
+```c++
+template <typename T>
+void dump() {
+    constexpr reflect::Record metaT = reflexpr(T);
+    std::cout << "name: " << metaT.get_display_name() << std::endl;
+    std::cout << "members:" << std::endl;
+    for(const RecordMember member : metaT.get_public_data_members())
+        std::cout
+            << "  " << member.get_type().get_display_name()
+            << " " << member.get_name() << std::endl;
+}
+```
+
+Each of these types have corresponding operations and together form a type
+hierarchy. For example, all `reflect::Class` objects are also `reflect::Type`
+objects.
+
+The @P0953R2 authors claim that this style of API reflects good practice and
+will be familiar to most C++ developers. They also point out that overload
+resolution works well and, for many simple use cases, "advanced" features such
+as non-type template parameters and concepts aren't necessary at all.
+
+On the other hand, the @P1240R0 authors point out,
+
+> Although the relationship between major language concepts is relatively
+> stable, we do occasionally make fundamental changes to our vocabulary (e.g.,
+> during the C++11 cycle we changed the definition of “variable”). Such a
+> vocabulary change is more disruptive to a class hierarchy design than it is
+> to certain other kinds of interfaces (we are thinking of function-based
+> interfaces here)
+
+They also claim that a type-based hierarchy will have a significant negative
+performance impact on code which uses reflection. A full critique of this
+approach can be found in @ReflexprRebuttle.
+
 ## Monotype Reflection and its Drawbacks
+
+"Scalable Reflection in C++" (@P1240R0) takes a different approach. They
+provide the following example.
+
+```c++
+template<Enum T>
+std::string to_string(T value) { // Could also be marked constexpr
+  for... (auto e : std::meta::members_of(reflexpr(T)) {
+    if (unreflexpr(e) == value) {
+      return std::meta::name_of(e);
+    }
+  }
+  return "<unnamed>";
+}
+```
+
+In this approach values returned by the `reflexpr` operator all have the same
+type, `meta::info`. Instead of constraining functions, such as `members_of`,
+based on parameter types, sentinel `meta::info` objects are used to represent
+errors. 
+
+```c++
+namespace std::meta {
+  constexpr! auto members_of(info class_type, auto ...filters)
+                        ->std::vector<info> {...};
+}
+```
+
+> If called with an argument for `class_type` that is the reflection of a
+> non-class type or a capturing closure type (or an alias/cv-qualified version
+> thereof), these facilities return a vector containing a single invalid
+> reflection.
+
+By not tying reflection facilities to a type hierarchy, performance is
+significantly improved and the language is better able to evolve.
+
+This approach has been critiqued by the authors of @P0953R2 for not following
+Object Oriented principles and for having a style foreign to most programmers.
+
+> Object-oriented design is simple to reason about and easy to write. It fits
+> naturally into C++ and its focus on values, type-safety, and conceptual
+> abstractions.
+
+They also claim that the compile-time performance benefits of the approach will
+shrink as compiler technology improves. For a full critique, see @P1477R0.
+
+## Moving Forward
+
+Is there a way past the impasse? A subset of the authors of @P0953R2 and
+@P1240R0 got together for several brainstorm sessions to determine what a
+compromise solution, if any, would look like. The end result was a hybrid
+between the two approaches utilizing a newly proposed language feature,
+parameter constraints.
 
 # Parameter Constraints
 
@@ -44,7 +150,7 @@ double pow( double base, int iexp ) requires (iexp == 2); // proposed
 ```
 
 The second declaration is identical to the first except it has an additional
-constraint that the second argument is `2`. Its implementation could be heavly
+constraint that the second argument is `2`. Its implementation could be heavily
 optimized given this additional information.
 
 Overload resolution in C++ happens at compile time, *not* run time, so how
@@ -52,9 +158,9 @@ could this ever work? Consider the call to `pow` in the following function.
 
 ```c++
 void f(double in) {
-    in += 5.0;
-    double d = pow(in, 2);
-    // ...
+  in += 5.0;
+  double d = pow(in, 2);
+  // ...
 }
 ```
 
@@ -102,17 +208,12 @@ void foo(char c) {
 }
 ```
 
-Our proposed concepts extension can solve this problem as well by making use of
-`static_assert` with a template. 
+Our proposed concepts extension can solve this problem as well, albeit without
+the diagnostic, by making use of `= delete`. 
 
 ```c++
 int isdigit(int c);
-
-template<bool always_false=false>
-int isdigit(int c) requires(c <= -1 || c > 255)
-{
-    static_assert(b, "'c' must have the value of an unsigned char or EOF");
-}
+int isdigit(int c) requires(c <= -1 || c > 255) = delete;
 ```
 
 # User-friendly and Evolution-friendly Reflection
@@ -124,7 +225,7 @@ reflection?
 elements of C++'s abstract syntax tree. This tree could change significantly
 over time with new revisions of the language. Because of this, `reflexpr`
 expressions should not result in values whose type are tightly bound to this
-hierarchy. Instead, these these values should be *convertable* to values within
+hierarchy. Instead, these values should be *convertible* to values within
 the hierarchy.
 
 ```c++
@@ -139,21 +240,19 @@ templates using parameter constraints in conversion constructors.
 
 ```c++
 namespace meta::cpp20 {
-class type {
-  public:
-    consteval type(meta::info i) requires(meta::is_type(i));
-    //...
+struct type {
+  consteval type(meta::info i) requires(meta::is_type(i));
+  //...
 };
-class class_ {
-  public:
-    consteval class_(meta::info i) requires(meta::is_class(i));
-    //...
+struct class_ {
+  consteval class_(meta::info i) requires(meta::is_class(i));
+  //...
 };
 }
 ```
 
-However, to provide users with seamless interaction with overloading, the following needs to be
-supported somehow.
+However, to provide users with seamless interaction with overloading, the
+following needs to be supported somehow.
 
 ```c++
 void print(meta::cpp20::namespace t); // #1
@@ -177,18 +276,16 @@ type hierarchy.
 
 ```c++
 namespace meta::cpp20 {
-class type {
-  public:
-    consteval type(meta::info i) requires( meta::is_type(i)
-                                       && !meta::is_class(i)
-                                       && !meta::is_union(i)
-                                       && !meta::is_enum(i) );
-    //...
+struct type {
+  consteval type(meta::info i) requires( meta::is_type(i)
+                                     && !meta::is_class(i)
+                                     && !meta::is_union(i)
+                                     && !meta::is_enum(i) );
+  //...
 };
-class class_ {
-  public:
-    consteval class_(meta::info i) requires( meta::is_class(i) );
-    //...
+struct class_ {
+  consteval class_(meta::info i) requires( meta::is_class(i) );
+  //...
 };
 }
 ```
@@ -201,12 +298,11 @@ Once in the type hierarchy, casting upward can be implemented in the usual way.
 
 ```c++
 namespace meta::cpp20 {
-class class_ {
-  public:
-    consteval class_(meta::info i) requires( meta::is_class(i) );
+struct class_ {
+  consteval class_(meta::info i) requires( meta::is_class(i) );
     
-    consteval operator type();
-    //...
+  consteval operator type();
+  //...
 };
 }
 ```
@@ -243,30 +339,30 @@ void h() {
 }
 ```
 
-For programmer convenience, we can additional provide a `most_derived` function
-which will take in a `meta::cpp20::object` (the most base class in the
+For programmer convenience, we can additionally provide a `most_derived`
+function which will take in a `meta::cpp20::object` (the most base class in the
 hierarchy) and return an instance of the most derived type for that object.
 
 ```c++
 namespace meta::cpp20 {
-    consteval std::vector<type_> get_member_types(class_ c) const;
+  consteval std::span<type_> get_member_types(class_ c) const;
 }
 
 struct baz {
-    enum E { /*...*/ };
-    class Buz{ /*...*/ };
-    using Biz = int;
+  enum E { /*...*/ };
+  class Buz{ /*...*/ };
+  using Biz = int;
 };
 
-void print(meta::cpp20::enum_);   #1
-void print(meta::cpp20::class_); #2
-void print(meta::cpp20::type);   #3
+void print(meta::cpp20::enum_);  // #1
+void print(meta::cpp20::class_); // #2
+void print(meta::cpp20::type);   // #3
 
 void f() {
-    constexpr meta::cpp20::class_ metaBaz = reflexpr(baz);
-    for...(constexpr meta::cpp20::type member_ : get_member_types(metaBaz)) {
-        print( meta::cpp20::most_derived(member_) ); // Calls #1, #2, and then #3
-    }
+  constexpr meta::cpp20::class_ metaBaz = reflexpr(baz);
+  for...(constexpr meta::cpp20::type member_ : get_member_types(metaBaz)) {
+    print( meta::cpp20::most_derived(member_) ); // Calls #1, #2, and then #3
+  }
 }
 ```
 
@@ -288,13 +384,109 @@ consteval enum_ most_derived(object o) requires( meta::is_enum(o.info()))
 }
 ```
 
+## Multiple User-defined Conversions
+
+It likely wouldn't be unusual to have a have a declaration like,
+
+```c++
+consteval X reflective_fun(type t);
+```
+
+, that is meant to accept _any_ type.  By limiting the match to only types
+whose associated most-derived meta-object type is `type`, we would not be able
+to easily pass e.g., `reflexpr(my_enum)` (going via `info`→`enum_type`→`type`
+requires two user-defined conversions, which isn't valid).
+
+We present a couple alternatives for making this work properly.
+
+### Prefer More-Constrained Conversion Candidates
+
+In this solution we would allow `meta::info` objects to be converted to any
+base classes *in addition* to the most-derived class.
+
+```c++
+namespace meta::cpp20 {
+
+struct type {
+  consteval type(info i) requires is_type(i);
+  // ...
+};
+struct enum_ {
+  consteval enum_(info i) requires is_type(i) && is_enum(i);
+  // ...
+};
+
+}
+```
+
+Overload resolution rules would be modified such that candidates with a more
+specific set of requires clauses are preferred. For example, conversion of
+`reflexpr(my_enum)` would match conversion to `enum_` better than conversion to
+`type`.
+
+### Use Actual Inheritance for Standard Conversion
+
+Conversion of a value one of its base classes is not considered a user-defined
+conversion so it can be used to work around the "two user-defined conversions"
+issue.
+
+```c++
+namespace meta::cpp20 {
+
+struct object { /*...*/ };
+struct named : public object { /*...*/ };
+struct type : public named { /*...*/ };
+struct enum_ : public type {
+  consteval enum_(info i) requires is_type(i) && is_enum(i);
+  // ...
+};
+
+}
+```
+
+Calling `reflective_fun` above with an argument `reflexpr(my_enum)` will result
+in a user-defined conversion to `enum_` and then a standard conversion to
+`type`.
+
+The slicing here is safe, but `meta::cpp20::downcast` must still be used
+instead of `dynamic_cast` to downcast.
+
+The benefit of this approach is that another language feature is not required.
+
 ## Evolution
 
-TODO: discuss the use of namespaces (`meta::cpp20`, `meta::cpp23`), how
-language design would impact those changes, and how backwards compatibility
-would work.
+The structure of C++'s abstract syntax tree (AST) can change drastically over time
+while the language itself retains backwards compatibility. It is important that
+reflection doesn't hinder evolution of C++'s AST. The design presented here,
+which relegates the AST view to a library feature, allows C++'s AST to evolve
+while retaining backwards compatibility of reflection-based code.
+
+The are two types of AST evolutions to consider:
+
+- **API backwards compatible changes**. Additions of new AST nodes or adding
+  additional functions that operate on AST classes fall into this category.
+  These types of changes can be made safely to the user-level API between
+  revisions of the programming language. Most AST modifications fall into this
+  category.
+- **API non-backwards compatible changes**. These kinds of changes involve a
+  reorganization of or significant meaning changes in the AST hierarchy. For
+  these kinds of changes a new namespace would be created (e.g. `meta::cpp29`)
+  containing the new hierarchy. The old namespace and classes would continue to
+  be functional with existing code although they wouldn't be expected to work
+  with newer features in the language. The expectation is that older AST
+  variants would be deprecated and eventually removed from the standard
+  library.
+
+Decoupling the type hierarchy (`meta::cpp20`) from the reflection language
+facility (`reflexpr`) provides a means for the language to continue its
+evolution and provides reflection users a reasonable migration path.
 
 # Conclusion
+
+Reflection facilities provide an interesting design challenge in both balancing
+flexibility in future migration of the language and providing an API that is
+intuitive and simple to use. The solution proposed here intends to strike a
+balance between the two that is sufficient for both these aims.
 
 ---
 references:
@@ -343,5 +535,23 @@ references:
     issued:
       year: 2019
     URL: http://clang.llvm.org/docs/AttributeReference.html#enable-if
-
+  - id: ReflexprRebuttle
+    citation-label: ReflexprRebuttle
+    title: "P1447 & P0953: A Rebuttal. Presentation delivered in 2019 Kona meeting."
+    issued:
+      year: 2019
+    URL: http://wiki.edg.com/pub/Wg21kona2019/SG7/reflexpr_rebuttal.pdf
+  - id: P1477R0
+    citation-label: P1477R0
+    title: "constexpr C++ is not constexpr C"
+    author:
+      - family: Chochlík
+        given: Matúš
+      - family: Naumann
+        given: Axel
+      - family: Sankel
+        given: David
+    issued:
+      year: 2019
+    URL: http://wg21.link/P1477R0
 ---
